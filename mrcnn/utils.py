@@ -324,6 +324,12 @@ class Dataset(object):
         """
         return self.image_info[image_id]["path"]
 
+    def load_image_and_mask(self, image_id):
+        image = self.load_image(image_id)
+        masks, class_ids = self.load_mask(image_id)
+        
+        return image, masks, class_ids
+
     def load_image(self, image_id):
         """Load the specified image and return a [H,W,3] Numpy array.
         """
