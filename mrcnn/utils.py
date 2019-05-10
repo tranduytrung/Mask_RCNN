@@ -21,6 +21,7 @@ import urllib.request
 import shutil
 import warnings
 from distutils.version import LooseVersion
+from mrcnn.models.utils import preprocess_input
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
@@ -865,7 +866,7 @@ def compute_backbone_shapes(config, image_shape):
         return config.COMPUTE_BACKBONE_SHAPE(image_shape)
 
     # Currently supports ResNet only
-    assert config.BACKBONE in ["resnet50", "resnet101"]
+    assert config.BACKBONE in ["resnet50", "resnet101", "mobilenetv2"]
     return np.array(
         [[int(math.ceil(image_shape[0] / stride)),
             int(math.ceil(image_shape[1] / stride))]
@@ -896,14 +897,15 @@ def parse_image_meta(meta):
         "active_class_ids": active_class_ids.astype(np.int32),
     }
 
-def mold_image(images, config):
+__mode_dict = {
+    'mobilenetv2': 'tf',
+    'resnet50': 'caffe',
+    'resnet101': 'caffe',
+}
+
+def normlize_image(images, config):
     """Expects an RGB image (or array of images) and subtracts
     the mean pixel and converts it to float. Expects image
     colors in RGB order.
     """
-    return images.astype(np.float32) - config.MEAN_PIXEL
-
-
-def unmold_image(normalized_images, config):
-    """Takes a image normalized with mold() and returns the original."""
-    return (normalized_images + config.MEAN_PIXEL).astype(np.uint8)
+    return preprocess_input(images, 'channels_last', __mode_dict[config.BACKBONE])

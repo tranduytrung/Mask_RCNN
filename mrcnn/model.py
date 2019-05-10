@@ -8,7 +8,8 @@ Written by Waleed Abdulla
 """
 
 import datetime
-import os, re
+import os
+import re
 from collections import OrderedDict
 import multiprocessing
 import numpy as np
@@ -17,10 +18,9 @@ import keras
 import keras.backend as K
 import keras.layers as KL
 import keras.models as KM
-import keras.backend as KB
 
 from mrcnn import utils
-from mrcnn.utils import log, mold_image, compute_backbone_shapes
+from mrcnn.utils import log, normlize_image, compute_backbone_shapes
 from mrcnn.layers.misc import norm_boxes_graph, parse_image_meta_graph
 from mrcnn.layers.resnet import resnet_graph
 from mrcnn.layers.proposal import ProposalLayer
@@ -31,7 +31,7 @@ from mrcnn.layers.fpn import fpn_classifier_graph, build_fpn_mask_graph
 from mrcnn.layers.loss import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_class_loss_graph, mrcnn_bbox_loss_graph, mrcnn_mask_loss_graph
 from mrcnn.data.generator import data_generator
 from mrcnn.data.load_image import compose_image_meta
-
+from mrcnn.models.mobilenetv2 import MobileNetV2
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
@@ -105,9 +105,8 @@ class MaskRCNN():
         # Bottom-up Layers
         # Returns a list of the last layers of each stage, 5 in total.
         # Don't create the thead (stage 5), so we pick the 4th item in the list.
-        if callable(config.BACKBONE):
-            _, C2, C3, C4, C5 = config.BACKBONE(input_image, stage5=True,
-                                                train_bn=config.TRAIN_BN)
+        if config.BACKBONE == 'mobilenetv2':
+            _, C2, C3, C4, C5 = MobileNetV2(input_tensor=input_image, include_top=False, return_stages=True, weights=None)
         else:
             _, C2, C3, C4, C5 = resnet_graph(input_image, config.BACKBONE,
                                              stage5=True, train_bn=config.TRAIN_BN)
@@ -594,7 +593,7 @@ class MaskRCNN():
                 min_scale=self.config.IMAGE_MIN_SCALE,
                 max_dim=self.config.IMAGE_MAX_DIM,
                 mode=self.config.IMAGE_RESIZE_MODE)
-            molded_image = mold_image(molded_image, self.config)
+            molded_image = normlize_image(molded_image, self.config)
             # Build image_meta
             image_meta = compose_image_meta(
                 0, image.shape, molded_image.shape, window, scale,
@@ -742,7 +741,6 @@ class MaskRCNN():
         for g in molded_images[1:]:
             assert g.shape == image_shape, "Images must have the same size"
 
-
         if verbose:
             log("molded_images", molded_images)
             log("image_metas", image_metas)
@@ -885,14 +883,17 @@ class MaskRCNN():
             log(k, v)
         return outputs_np
 
+
 if __name__ == "__main__":
     from mrcnn.config import Config
+
     class InferenceConfig(Config):
         # Set batch size to 1 since we'll be running inference on
         # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
         NAME = 'test'
         GPU_COUNT = 1
         IMAGES_PER_GPU = 1
+        BACKBONE = 'mobilenetv2'
 
     config = InferenceConfig()
     MaskRCNN(mode="inference", model_dir='.', config=config)
