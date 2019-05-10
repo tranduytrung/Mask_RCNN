@@ -17,6 +17,7 @@ import keras
 import keras.backend as K
 import keras.layers as KL
 import keras.models as KM
+import keras.backend as KB
 
 from mrcnn import utils
 from mrcnn.utils import log, mold_image, compute_backbone_shapes
@@ -78,7 +79,7 @@ class MaskRCNN():
 
         # Inputs
         input_image = KL.Input(
-            shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
+            shape=config.IMAGE_SHAPE, name="input_image")
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
         if mode == "training":
@@ -99,9 +100,6 @@ class MaskRCNN():
             # Normalize coordinates
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
-        elif mode == "inference":
-            # Anchors in normalized coordinates
-            input_anchors = KL.Input(shape=[None, 4], name="input_anchors")
 
         # Build the shared convolutional layers.
         # Bottom-up Layers
@@ -144,17 +142,8 @@ class MaskRCNN():
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
         # Anchors
-        if mode == "training":
-            anchors = self.get_anchors(config.IMAGE_SHAPE)
-            # Duplicate across the batch dimension because Keras requires it
-            # TODO: can this be optimized to avoid duplicating the anchors?
-            anchors = np.broadcast_to(
-                anchors, (config.BATCH_SIZE,) + anchors.shape)
-            # A hack to get around Keras's bad support for constants
-            anchors = KL.Lambda(lambda x: tf.Variable(
-                anchors), name="anchors")(input_image)
-        else:
-            anchors = input_anchors
+        np_anchors = self.get_anchors(config.IMAGE_SHAPE)
+        anchors = KL.Input(tensor=tf.constant(np_anchors))
 
         # RPN Model
         rpn = build_rpn_model(config.RPN_ANCHOR_STRIDE,
@@ -233,7 +222,7 @@ class MaskRCNN():
 
             # Model
             inputs = [input_image, input_image_meta,
-                      input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes]
+                      input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, anchors]
             if not config.USE_RPN_ROIS:
                 inputs.append(input_rois)
             outputs = [rpn_class_logits, rpn_class, rpn_bbox,
@@ -256,7 +245,7 @@ class MaskRCNN():
             detections = DetectionLayer(config, name="mrcnn_detection")(
                 [rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
-            model = KM.Model([input_image, input_image_meta, input_anchors],
+            model = KM.Model([input_image, input_image_meta, anchors],
                              [detections, mrcnn_class, mrcnn_bbox,
                                  rpn_rois, rpn_class, rpn_bbox],
                              name='mask_rcnn')
@@ -703,21 +692,13 @@ class MaskRCNN():
             assert g.shape == image_shape,\
                 "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
 
-        # Anchors
-        anchors = self.get_anchors(image_shape)
-        # Duplicate across the batch dimension because Keras requires it
-        # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(
-            anchors, (self.config.BATCH_SIZE,) + anchors.shape)
-
         if verbose:
             log("molded_images", molded_images)
             log("image_metas", image_metas)
-            log("anchors", anchors)
         # Run object detection
         detections, _, _, _, _, _ =\
             self.keras_model.predict(
-                [molded_images, image_metas, anchors], verbose=0)
+                [molded_images, image_metas], verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(images):
@@ -761,21 +742,14 @@ class MaskRCNN():
         for g in molded_images[1:]:
             assert g.shape == image_shape, "Images must have the same size"
 
-        # Anchors
-        anchors = self.get_anchors(image_shape)
-        # Duplicate across the batch dimension because Keras requires it
-        # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(
-            anchors, (self.config.BATCH_SIZE,) + anchors.shape)
 
         if verbose:
             log("molded_images", molded_images)
             log("image_metas", image_metas)
-            log("anchors", anchors)
         # Run object detection
         detections, _, _, mrcnn_mask, _, _, _ =\
             self.keras_model.predict(
-                [molded_images, image_metas, anchors], verbose=0)
+                [molded_images, image_metas], verbose=0)
         # Process detections
         results = []
         for i, image in enumerate(molded_images):
@@ -808,8 +782,8 @@ class MaskRCNN():
                 self.config.RPN_ANCHOR_STRIDE)
             # Keep a copy of the latest anchors in pixel coordinates because
             # it's used in inspect_model notebooks.
-            # TODO: Remove this after the notebook are refactored to not use it
-            self.anchors = a
+            # Remove this after the notebook are refactored to not use it
+            # self.anchors = a
             # Normalize coordinates
             self._anchor_cache[tuple(image_shape)] = utils.norm_boxes(
                 a, image_shape[:2])
@@ -896,13 +870,8 @@ class MaskRCNN():
         else:
             molded_images = images
         image_shape = molded_images[0].shape
-        # Anchors
-        anchors = self.get_anchors(image_shape)
-        # Duplicate across the batch dimension because Keras requires it
-        # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(
-            anchors, (self.config.BATCH_SIZE,) + anchors.shape)
-        model_in = [molded_images, image_metas, anchors]
+
+        model_in = [molded_images, image_metas]
 
         # Run inference
         if model.uses_learning_phase and not isinstance(K.learning_phase(), int):
@@ -915,3 +884,15 @@ class MaskRCNN():
         for k, v in outputs_np.items():
             log(k, v)
         return outputs_np
+
+if __name__ == "__main__":
+    from mrcnn.config import Config
+    class InferenceConfig(Config):
+        # Set batch size to 1 since we'll be running inference on
+        # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+        NAME = 'test'
+        GPU_COUNT = 1
+        IMAGES_PER_GPU = 1
+
+    config = InferenceConfig()
+    MaskRCNN(mode="inference", model_dir='.', config=config)
