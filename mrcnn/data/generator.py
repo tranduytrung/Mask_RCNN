@@ -7,8 +7,7 @@ from mrcnn.data.rois import generate_random_rois
 from mrcnn.data.rpn_targets import build_rpn_targets
 
 def data_generator(dataset, config, shuffle=True, augmentation=None,
-                   random_rois=0, batch_size=1, detection_targets=False,
-                   no_augmentation_sources=None):
+                   random_rois=0, batch_size=1, detection_targets=False):
     """A generator that returns images and corresponding target class ids,
     bounding box deltas, and masks.
 
@@ -46,7 +45,7 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
     """
     b = 0  # batch item index
     image_index = -1
-    image_ids = np.copy(dataset.image_ids)
+    image_ids = np.arange(len(dataset))
     error_count = 0
     no_augmentation_sources = no_augmentation_sources or []
 

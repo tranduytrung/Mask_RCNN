@@ -19,7 +19,7 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     bbox: [instance_count, IMAGE_SOURCES, (y1, x1, y2, x2)]
     """
     # Load image and mask
-    image, mask, class_ids = dataset.load_image_and_mask(image_id)
+    image, mask, class_ids = dataset[image_id]
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
         image.reshape((original_shape[0], original_shape[1], -1)),
