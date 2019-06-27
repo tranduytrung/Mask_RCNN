@@ -33,27 +33,29 @@ COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0
 
 def extract_bboxes(mask):
     """Compute bounding boxes from masks.
-    mask: [height, width, num_instances]. Mask pixels are either 1 or 0.
+    mask: [height, width, num_instances, IMAGE_SOURCES]. Mask pixels are either 1 or 0.
 
-    Returns: bbox array [num_instances, (y1, x1, y2, x2)].
+    Returns: bbox array [num_instances, IMAGE_SOURCES, (y1, x1, y2, x2)].
     """
-    boxes = np.zeros([mask.shape[-1], 4], dtype=np.int32)
-    for i in range(mask.shape[-1]):
-        m = mask[:, :, i]
-        # Bounding box.
-        horizontal_indicies = np.where(np.any(m, axis=0))[0]
-        vertical_indicies = np.where(np.any(m, axis=1))[0]
-        if horizontal_indicies.shape[0]:
-            x1, x2 = horizontal_indicies[[0, -1]]
-            y1, y2 = vertical_indicies[[0, -1]]
-            # x2 and y2 should not be part of the box. Increment by 1.
-            x2 += 1
-            y2 += 1
-        else:
-            # No mask for this instance. Might happen due to
-            # resizing or cropping. Set bbox to zeros
-            x1, x2, y1, y2 = 0, 0, 0, 0
-        boxes[i] = np.array([y1, x1, y2, x2])
+    n_instances, n_image_sources = mask.shape[2:]
+    boxes = np.zeros([n_instances, n_image_sources, 4], dtype=np.int32)
+    for i in range(n_instances):
+        for j in range(n_image_sources):
+            m = mask[:, :, i, j]
+            # Bounding box.
+            horizontal_indicies = np.where(np.any(m, axis=0))[0]
+            vertical_indicies = np.where(np.any(m, axis=1))[0]
+            if horizontal_indicies.shape[0]:
+                x1, x2 = horizontal_indicies[[0, -1]]
+                y1, y2 = vertical_indicies[[0, -1]]
+                # x2 and y2 should not be part of the box. Increment by 1.
+                x2 += 1
+                y2 += 1
+            else:
+                # No mask for this instance. Might happen due to
+                # resizing or cropping. Set bbox to zeros
+                x1, x2, y1, y2 = 0, 0, 0, 0
+            boxes[i, j] = np.array([y1, x1, y2, x2])
     return boxes.astype(np.int32)
 
 
@@ -332,7 +334,7 @@ class Dataset(object):
         return image, masks, class_ids
 
     def load_image(self, image_id):
-        """Load the specified image and return a [H,W,3] Numpy array.
+        """Load the specified image and return a [H,W,IMAGE_SOURCES*3] Numpy array.
         """
         # Load image
         image = skimage.io.imread(self.image_info[image_id]['path'])
@@ -342,14 +344,14 @@ class Dataset(object):
         # If has an alpha channel, remove it for consistency
         if image.shape[-1] == 4:
             image = image[..., :3]
-        return image
+        return image # expand to image sources
 
     def load_mask(self, image_id):
         """Load instance masks for the given image.
 
         Different datasets use different ways to store masks. Override this
         method to load instance masks and return them in the form of am
-        array of binary masks of shape [height, width, instances].
+        array of binary masks of shape [height, width, instances, IMAGE_SOURCES].
 
         Returns:
             masks: A bool array of shape [height, width, instance count] with

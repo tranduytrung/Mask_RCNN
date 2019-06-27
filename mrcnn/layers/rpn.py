@@ -2,7 +2,7 @@ import tensorflow as tf
 import keras.layers as KL
 import keras.models as KM
 
-def rpn_graph(feature_map, anchors_per_location, anchor_stride):
+def rpn_graph(feature_map, anchors_per_location, anchor_stride, n_image_source):
     """Builds the computation graph of Region Proposal Network.
 
     feature_map: backbone features [batch, height, width, depth]
@@ -13,7 +13,7 @@ def rpn_graph(feature_map, anchors_per_location, anchor_stride):
     Returns:
         rpn_class_logits: [batch, H * W * anchors_per_location, 2] Anchor classifier logits (before softmax)
         rpn_probs: [batch, H * W * anchors_per_location, 2] Anchor classifier probabilities.
-        rpn_bbox: [batch, H * W * anchors_per_location, (dy, dx, log(dh), log(dw))] Deltas to be
+        rpn_bbox: [batch, H * W * anchors_per_location, n_image_source, (dy, dx, log(dh), log(dw))] Deltas to be
                   applied to anchors.
     """
     # TODO: check if stride of 2 causes alignment issues if the feature map
@@ -37,16 +37,16 @@ def rpn_graph(feature_map, anchors_per_location, anchor_stride):
 
     # Bounding box refinement. [batch, H, W, anchors per location * depth]
     # where depth is [x, y, log(w), log(h)]
-    x = KL.Conv2D(anchors_per_location * 4, (1, 1), padding="valid",
+    x = KL.Conv2D(anchors_per_location * n_image_source * 4, (1, 1), padding="valid",
                   activation='linear', name='rpn_bbox_pred')(shared)
 
-    # Reshape to [batch, anchors, 4]
-    rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))(x)
+    # Reshape to [batch, anchors, n_image_source, 4]
+    rpn_bbox = KL.Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, n_image_source, 4]))(x)
 
     return [rpn_class_logits, rpn_probs, rpn_bbox]
 
 
-def build_rpn_model(anchor_stride, anchors_per_location, depth):
+def build_rpn_model(anchor_stride, anchors_per_location, depth, n_image_source):
     """Builds a Keras model of the Region Proposal Network.
     It wraps the RPN graph so it can be used multiple times with shared
     weights.
@@ -59,10 +59,10 @@ def build_rpn_model(anchor_stride, anchors_per_location, depth):
     Returns a Keras Model object. The model outputs, when called, are:
     rpn_class_logits: [batch, H * W * anchors_per_location, 2] Anchor classifier logits (before softmax)
     rpn_probs: [batch, H * W * anchors_per_location, 2] Anchor classifier probabilities.
-    rpn_bbox: [batch, H * W * anchors_per_location, (dy, dx, log(dh), log(dw))] Deltas to be
+    rpn_bbox: [batch, H * W * anchors_per_location, n_image_source, (dy, dx, log(dh), log(dw))] Deltas to be
                 applied to anchors.
     """
     input_feature_map = KL.Input(shape=[None, None, depth],
                                  name="input_rpn_feature_map")
-    outputs = rpn_graph(input_feature_map, anchors_per_location, anchor_stride)
+    outputs = rpn_graph(input_feature_map, anchors_per_location, anchor_stride, n_image_source)
     return KM.Model([input_feature_map], outputs, name="rpn_model")

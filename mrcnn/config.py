@@ -209,6 +209,9 @@ class Config(object):
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0
 
+    # Th number of image sources (same with different point of view)
+    IMAGE_SOURCES = 1
+
     def __init__(self):
         """Set values of computed attributes."""
         # Effective batch size

@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 import keras.engine as KE
-from mrcnn.layers.misc import batch_slice
+from mrcnn.layers.misc import batch_slice, apply_box_deltas_graph, clip_boxes_graph
 
 
 class ProposalLayer(KE.Layer):
@@ -12,7 +12,7 @@ class ProposalLayer(KE.Layer):
 
     Inputs:
         rpn_probs: [batch, num_anchors, (bg prob, fg prob)]
-        rpn_bbox: [batch, num_anchors, (dy, dx, log(dh), log(dw))]
+        rpn_bbox: [batch, num_anchors, IMAGE_SOURCES, (dy, dx, log(dh), log(dw))]
         anchors: [batch, num_anchors, (y1, x1, y2, x2)] anchors in normalized coordinates
 
     Returns:
@@ -29,8 +29,8 @@ class ProposalLayer(KE.Layer):
         # Box Scores. Use the foreground class confidence. [Batch, num_rois, 1]
         scores = inputs[0][:, :, 1]
         # Box deltas [batch, num_rois, 4]
-        deltas = inputs[1]
-        deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 4])
+        deltas = inputs[1] # [batch, num_anchors, IMAGE_SOURCES, (dy, dx, log(dh), log(dw))]
+        deltas = deltas * np.reshape(self.config.RPN_BBOX_STD_DEV, [1, 1, 1, 4])
         # Anchors
         anchors = inputs[2]
 
@@ -49,14 +49,14 @@ class ProposalLayer(KE.Layer):
                                     names=["pre_nms_anchors"])
 
         # Apply deltas to anchors to get refined anchors.
-        # [batch, N, (y1, x1, y2, x2)]
+        # [batch, N, IMAGE_SOURCES, (y1, x1, y2, x2)]
         boxes = batch_slice([pre_nms_anchors, deltas],
                                   lambda x, y: apply_box_deltas_graph(x, y),
                                   self.config.IMAGES_PER_GPU,
                                   names=["refined_anchors"])
 
         # Clip to image boundaries. Since we're in normalized coordinates,
-        # clip to 0..1 range. [batch, N, (y1, x1, y2, x2)]
+        # clip to 0..1 range. [batch, N, IMAGE_SOURCES, (y1, x1, y2, x2)]
         window = np.array([0, 0, 1, 1], dtype=np.float32)
         boxes = batch_slice(boxes,
                                   lambda x: clip_boxes_graph(x, window),
@@ -69,59 +69,20 @@ class ProposalLayer(KE.Layer):
 
         # Non-max suppression
         def nms(boxes, scores):
+            master_boxes = boxes[:, 0, :]
             indices = tf.image.non_max_suppression(
-                boxes, scores, self.proposal_count,
+                master_boxes, scores, self.proposal_count,
                 self.nms_threshold, name="rpn_non_max_suppression")
             proposals = tf.gather(boxes, indices)
             # Pad if needed
             padding = tf.maximum(self.proposal_count - tf.shape(proposals)[0], 0)
-            proposals = tf.pad(proposals, [(0, padding), (0, 0)])
+            proposals = tf.pad(proposals, [(0, padding), (0, 0), (0,0)])
             return proposals
         proposals = batch_slice([boxes, scores], nms,
                                       self.config.IMAGES_PER_GPU)
+        proposals.set_shape((proposals.shape[0], self.proposal_count, self.config.IMAGE_SOURCES, 4))
         return proposals
 
     def compute_output_shape(self, input_shape):
-        return (None, self.proposal_count, 4)
+        return (None, self.proposal_count, self.config.IMAGE_SOURCES, 4)
 
-
-def apply_box_deltas_graph(boxes, deltas):
-    """Applies the given deltas to the given boxes.
-    boxes: [N, (y1, x1, y2, x2)] boxes to update
-    deltas: [N, (dy, dx, log(dh), log(dw))] refinements to apply
-    """
-    # Convert to y, x, h, w
-    height = boxes[:, 2] - boxes[:, 0]
-    width = boxes[:, 3] - boxes[:, 1]
-    center_y = boxes[:, 0] + 0.5 * height
-    center_x = boxes[:, 1] + 0.5 * width
-    # Apply deltas
-    center_y += deltas[:, 0] * height
-    center_x += deltas[:, 1] * width
-    height *= tf.exp(deltas[:, 2])
-    width *= tf.exp(deltas[:, 3])
-    # Convert back to y1, x1, y2, x2
-    y1 = center_y - 0.5 * height
-    x1 = center_x - 0.5 * width
-    y2 = y1 + height
-    x2 = x1 + width
-    result = tf.stack([y1, x1, y2, x2], axis=1, name="apply_box_deltas_out")
-    return result
-
-
-def clip_boxes_graph(boxes, window):
-    """
-    boxes: [N, (y1, x1, y2, x2)]
-    window: [4] in the form y1, x1, y2, x2
-    """
-    # Split
-    wy1, wx1, wy2, wx2 = tf.split(window, 4)
-    y1, x1, y2, x2 = tf.split(boxes, 4, axis=1)
-    # Clip
-    y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
-    x1 = tf.maximum(tf.minimum(x1, wx2), wx1)
-    y2 = tf.maximum(tf.minimum(y2, wy2), wy1)
-    x2 = tf.maximum(tf.minimum(x2, wx2), wx1)
-    clipped = tf.concat([y1, x1, y2, x2], axis=1, name="clipped_boxes")
-    clipped.set_shape((clipped.shape[0], 4))
-    return clipped

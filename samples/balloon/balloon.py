@@ -74,6 +74,8 @@ class BalloonConfig(Config):
     # Skip detections with < 90% confidence
     DETECTION_MIN_CONFIDENCE = 0.9
 
+    BACKBONE = 'resnet50'
+
 
 ############################################################
 #  Dataset
@@ -156,16 +158,15 @@ class BalloonDataset(utils.Dataset):
         # Convert polygons to a bitmap mask of shape
         # [height, width, instance_count]
         info = self.image_info[image_id]
-        mask = np.zeros([info["height"], info["width"], len(info["polygons"])],
-                        dtype=np.uint8)
+        mask = np.zeros([info["height"], info["width"], len(info["polygons"]), 1], dtype=np.uint8)
         for i, p in enumerate(info["polygons"]):
             # Get indexes of pixels inside the polygon and set them to 1
             rr, cc = skimage.draw.polygon(p['all_points_y'], p['all_points_x'])
-            mask[rr, cc, i] = 1
+            mask[rr, cc, i, 0] = 1
 
         # Return mask, and array of class IDs of each instance. Since we have
         # one class ID only, we return an array of 1s
-        return mask.astype(np.bool), np.ones([mask.shape[-1]], dtype=np.int32)
+        return mask.astype(np.bool), np.ones([mask.shape[-2]], dtype=np.int32)
 
     def image_reference(self, image_id):
         """Return the path of the image."""
@@ -199,24 +200,19 @@ def train(model):
                 layers='heads')
 
 
-def color_splash(image, mask):
+def draw_boxes(image, bboxes):
     """Apply color splash effect.
     image: RGB image [height, width, 3]
-    mask: instance segmentation mask [height, width, instance count]
+    bboxes: list of boxes [num_boxes, (y1, x1, y2, x2)]
 
     Returns result image.
     """
-    # Make a grayscale copy of the image. The grayscale copy still
-    # has 3 RGB channels, though.
-    gray = skimage.color.gray2rgb(skimage.color.rgb2gray(image)) * 255
-    # Copy color pixels from the original color image where mask is set
-    if mask.shape[-1] > 0:
-        # We're treating all instances as one, so collapse the mask into one layer
-        mask = (np.sum(mask, -1, keepdims=True) >= 1)
-        splash = np.where(mask, image, gray).astype(np.uint8)
-    else:
-        splash = gray.astype(np.uint8)
-    return splash
+    for idx in range(len(bboxes)):
+        bbox = bboxes[idx]
+        rr, cc = skimage.draw.rectangle_perimeter(bbox[:2], bbox[2:], shape=image.shape)
+        image[rr, cc] = (255, 0, 0)
+
+    return image    
 
 
 def detect_and_color_splash(model, image_path=None, video_path=None):
@@ -231,7 +227,7 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
         # Detect objects
         r = model.detect([image], verbose=1)[0]
         # Color splash
-        splash = color_splash(image, r['masks'])
+        splash = draw_boxes(image, r['rois'])
         # Save output
         file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
         skimage.io.imsave(file_name, splash)
@@ -261,7 +257,7 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
                 # Detect objects
                 r = model.detect([image], verbose=0)[0]
                 # Color splash
-                splash = color_splash(image, r['masks'])
+                splash = draw_boxes(image, r['masks'])
                 # RGB -> BGR to save image to video
                 splash = splash[..., ::-1]
                 # Add image to video writer

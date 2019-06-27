@@ -41,24 +41,25 @@ def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
     """Return the RPN bounding box loss graph.
 
     config: the model config object.
-    target_bbox: [batch, max positive anchors, (dy, dx, log(dh), log(dw))].
+    target_bbox: [batch, max positive anchors, IMAGE_SOURCES, (dy, dx, log(dh), log(dw))].
         Uses 0 padding to fill in unsed bbox deltas.
     rpn_match: [batch, anchors, 1]. Anchor match type. 1=positive,
                -1=negative, 0=neutral anchor.
-    rpn_bbox: [batch, anchors, (dy, dx, log(dh), log(dw))]
+    rpn_bbox: [batch, anchors, IMAGE_SOURCES, (dy, dx, log(dh), log(dw))]
     """
     # Positive anchors contribute to the loss, but negative and
     # neutral anchors (match value of 0 or -1) don't.
     rpn_match = K.squeeze(rpn_match, -1)
-    indices = tf.where(K.equal(rpn_match, 1))
+    positive_mask = K.equal(rpn_match, 1)
+    indices = tf.where(positive_mask)
 
     # Pick bbox deltas that contribute to the loss
-    rpn_bbox = tf.gather_nd(rpn_bbox, indices)
+    rpn_bbox = tf.gather_nd(rpn_bbox, indices) # [batch * anchor, IMAGE_SOURCES, 4]
 
     # Trim target bounding box deltas to the same length as rpn_bbox.
-    batch_counts = K.sum(K.cast(K.equal(rpn_match, 1), tf.int32), axis=1)
+    batch_counts = K.sum(K.cast(positive_mask, tf.int32), axis=1)
     target_bbox = batch_pack_graph(target_bbox, batch_counts,
-                                   config.IMAGES_PER_GPU)
+                                   config.BATCH_SIZE)
 
     loss = smooth_l1_loss(target_bbox, rpn_bbox)
     

@@ -7,38 +7,42 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
 
     anchors: [num_anchors, (y1, x1, y2, x2)]
     gt_class_ids: [num_gt_boxes] Integer class IDs.
-    gt_boxes: [num_gt_boxes, (y1, x1, y2, x2)]
+    gt_boxes: [num_gt_boxes, IMAGE_SOURCES, (y1, x1, y2, x2)]
 
     Returns:
     rpn_match: [N] (int32) matches between anchors and GT boxes.
                1 = positive anchor, -1 = negative anchor, 0 = neutral
-    rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
+    rpn_bbox: [N, IMAGE_SOURCES, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
     """
+    n_boxes, n_image_source = gt_boxes.shape[:2]
     # RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
     rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
     # RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
-    rpn_bbox = np.zeros((config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
+    rpn_bbox = np.zeros((config.RPN_TRAIN_ANCHORS_PER_IMAGE, n_image_source, 4))
+
+    # master boxes
+    master_gt_boxes = gt_boxes[:, 0, :]
 
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
     # them from training. A crowd box is given a negative class ID.
-    crowd_ix = np.where(gt_class_ids < 0)[0]
-    if crowd_ix.shape[0] > 0:
-        # Filter out crowds from ground truth class IDs and boxes
-        non_crowd_ix = np.where(gt_class_ids > 0)[0]
-        crowd_boxes = gt_boxes[crowd_ix]
-        gt_class_ids = gt_class_ids[non_crowd_ix]
-        gt_boxes = gt_boxes[non_crowd_ix]
-        # Compute overlaps with crowd boxes [anchors, crowds]
-        crowd_overlaps = utils.compute_overlaps(anchors, crowd_boxes)
-        crowd_iou_max = np.amax(crowd_overlaps, axis=1)
-        no_crowd_bool = (crowd_iou_max < 0.001)
-    else:
-        # All anchors don't intersect a crowd
-        no_crowd_bool = np.ones([anchors.shape[0]], dtype=bool)
+    # crowd_ix = np.where(gt_class_ids < 0)[0]
+    # if crowd_ix.shape[0] > 0:
+    #     # Filter out crowds from ground truth class IDs and boxes
+    #     non_crowd_ix = np.where(gt_class_ids > 0)[0]
+    #     crowd_boxes = master_gt_boxes[crowd_ix]
+    #     gt_class_ids = gt_class_ids[non_crowd_ix]
+    #     master_gt_boxes = master_gt_boxes[non_crowd_ix]
+    #     # Compute overlaps with crowd boxes [anchors, crowds]
+    #     crowd_overlaps = utils.compute_overlaps(anchors, crowd_boxes)
+    #     crowd_iou_max = np.amax(crowd_overlaps, axis=1)
+    #     no_crowd_bool = (crowd_iou_max < 0.001)
+    # else:
+    #     # All anchors don't intersect a crowd
+    #     no_crowd_bool = np.ones([anchors.shape[0]], dtype=bool)
 
     # Compute overlaps [num_anchors, num_gt_boxes]
-    overlaps = utils.compute_overlaps(anchors, gt_boxes)
+    overlaps = utils.compute_overlaps(anchors, master_gt_boxes)
 
     # Match anchors to GT Boxes
     # If an anchor overlaps a GT box with IoU >= 0.7 then it's positive.
@@ -52,7 +56,8 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
     # matched to them. Skip boxes in crowd areas.
     anchor_iou_argmax = np.argmax(overlaps, axis=1)
     anchor_iou_max = overlaps[np.arange(overlaps.shape[0]), anchor_iou_argmax]
-    rpn_match[(anchor_iou_max < 0.3) & (no_crowd_bool)] = -1
+    # rpn_match[(anchor_iou_max < 0.3) & (no_crowd_bool)] = -1
+    rpn_match[anchor_iou_max < 0.3] = -1
     # 2. Set an anchor for each GT box (regardless of IoU value).
     # If multiple anchors have the same IoU match all of them
     gt_iou_argmax = np.argwhere(overlaps == np.max(overlaps, axis=0))[:,0]
@@ -83,30 +88,32 @@ def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
     ix = 0  # index into rpn_bbox
     # TODO: use box_refinement() rather than duplicating the code here
     for i, a in zip(ids, anchors[ids]):
-        # Closest gt box (it might have IoU < 0.7)
-        gt = gt_boxes[anchor_iou_argmax[i]]
-
-        # Convert coordinates to center plus width/height.
-        # GT Box
-        gt_h = gt[2] - gt[0]
-        gt_w = gt[3] - gt[1]
-        gt_center_y = gt[0] + 0.5 * gt_h
-        gt_center_x = gt[1] + 0.5 * gt_w
         # Anchor
         a_h = a[2] - a[0]
         a_w = a[3] - a[1]
         a_center_y = a[0] + 0.5 * a_h
         a_center_x = a[1] + 0.5 * a_w
+        for idx_image_source in range(n_image_source):
+            # Closest gt box (it might have IoU < 0.7)
+            gt = gt_boxes[anchor_iou_argmax[i], idx_image_source]
 
-        # Compute the bbox refinement that the RPN should predict.
-        rpn_bbox[ix] = [
-            (gt_center_y - a_center_y) / a_h,
-            (gt_center_x - a_center_x) / a_w,
-            np.log(gt_h / a_h),
-            np.log(gt_w / a_w),
-        ]
-        # Normalize
-        rpn_bbox[ix] /= config.RPN_BBOX_STD_DEV
+            # Convert coordinates to center plus width/height.
+            # GT Box
+            gt_h = gt[2] - gt[0]
+            gt_w = gt[3] - gt[1]
+            gt_center_y = gt[0] + 0.5 * gt_h
+            gt_center_x = gt[1] + 0.5 * gt_w
+
+
+            # Compute the bbox refinement that the RPN should predict.
+            rpn_bbox[ix, idx_image_source] = [
+                (gt_center_y - a_center_y) / a_h,
+                (gt_center_x - a_center_x) / a_w,
+                np.log(gt_h / a_h),
+                np.log(gt_w / a_w),
+            ]
+            # Normalize
+            rpn_bbox[ix, idx_image_source] /= config.RPN_BBOX_STD_DEV
         ix += 1
 
     return rpn_match, rpn_bbox

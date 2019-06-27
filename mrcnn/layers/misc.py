@@ -1,13 +1,16 @@
 import tensorflow as tf
 
 def trim_zeros_graph(boxes, name='trim_zeros'):
-    """Often boxes are represented with matrices of shape [N, 4] and
+    """Often boxes are represented with matrices of shape [N, IMAGE_SOURCES?, 4] and
     are padded with zeros. This removes zero boxes.
 
     boxes: [N, 4] matrix of boxes.
     non_zeros: [N] a 1D boolean mask identifying the rows to keep
     """
-    non_zeros = tf.cast(tf.reduce_sum(tf.abs(boxes), axis=1), tf.bool)
+    master_boxes = boxes
+    if len(boxes.shape) == 3:
+        master_boxes = boxes[:, 0, :]
+    non_zeros = tf.cast(tf.reduce_sum(tf.abs(master_boxes), axis=1), tf.bool)
     boxes = tf.boolean_mask(boxes, non_zeros, name=name)
     return boxes, non_zeros
 
@@ -103,6 +106,49 @@ def box_refinement_graph(box, gt_box):
     result = tf.stack([dy, dx, dh, dw], axis=1)
     return result
 
+
+def apply_box_deltas_graph(boxes, deltas):
+    """Applies the given deltas to the given boxes.
+    boxes: [N, (y1, x1, y2, x2)] boxes to update
+    deltas: [N, IMAGE_SOURCES, (dy, dx, log(dh), log(dw))] refinements to apply
+    """
+    # Convert to y, x, h, w
+    height = (boxes[:, 2] - boxes[:, 0])[:, None]
+    width = (boxes[:, 3] - boxes[:, 1])[:, None]
+    center_y = boxes[:, 0:1] + 0.5 * height
+    center_x = boxes[:, 1:2] + 0.5 * width
+    # Apply deltas
+    cy = center_y + deltas[:, :, 0] * height # [N, IMAGE_SOURCES]
+    cx = center_x + deltas[:, :, 1] * width # [N, IMAGE_SOURCES]
+    ch = height * tf.exp(deltas[:, :, 2])
+    cw = width * tf.exp(deltas[:, :, 3])
+    # Convert back to y1, x1, y2, x2
+    y1 = cy - 0.5 * ch
+    x1 = cx - 0.5 * cw
+    y2 = y1 + ch
+    x2 = x1 + cw
+    result = tf.stack([y1, x1, y2, x2], axis=2, name="apply_box_deltas_out")
+    return result
+
+
+def clip_boxes_graph(boxes, window):
+    """
+    boxes: [N, IMAGE_SOURCES, (y1, x1, y2, x2)]
+    window: [4] in the form y1, x1, y2, x2
+    """
+    n = boxes.shape[0]
+    n_image_sources = boxes.shape[1]
+    # Split
+    wy1, wx1, wy2, wx2 = tf.split(window, 4)
+    y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
+    # Clip
+    y1 = tf.maximum(tf.minimum(y1, wy2), wy1)
+    x1 = tf.maximum(tf.minimum(x1, wx2), wx1)
+    y2 = tf.maximum(tf.minimum(y2, wy2), wy1)
+    x2 = tf.maximum(tf.minimum(x2, wx2), wx1)
+    clipped = tf.concat([y1, x1, y2, x2], axis=2, name="clipped_boxes")
+    clipped.set_shape((n, n_image_sources, 4))
+    return clipped
 
 # ## Batch Slicing
 # Some custom layers support a batch size of 1 only, and require a lot of work

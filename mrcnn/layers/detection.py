@@ -1,14 +1,13 @@
 import tensorflow as tf
 import keras.engine as KE
-from mrcnn.layers.misc import batch_slice, parse_image_meta_graph, norm_boxes_graph
-from mrcnn.layers.proposal import apply_box_deltas_graph, clip_boxes_graph
+from mrcnn.layers.misc import batch_slice, parse_image_meta_graph, norm_boxes_graph, apply_box_deltas_graph, clip_boxes_graph
 
-def refine_detections_graph(rois, probs, deltas, window, config):
+def refine_detections_graph(vrois, probs, deltas, window, config):
     """Refine classified proposals and filter overlaps and return final
     detections.
 
     Inputs:
-        rois: [N, (y1, x1, y2, x2)] in normalized coordinates
+        vrois: [N, IMAGE_SOURCES, (y1, x1, y2, x2)] in normalized coordinates
         probs: [N, num_classes]. Class probabilities.
         deltas: [N, num_classes, (dy, dx, log(dh), log(dw))]. Class-specific
                 bounding box deltas.
@@ -27,10 +26,15 @@ def refine_detections_graph(rois, probs, deltas, window, config):
     deltas_specific = tf.gather_nd(deltas, indices)
     # Apply bounding box deltas
     # Shape: [boxes, (y1, x1, y2, x2)] in normalized coordinates
+    rois = vrois[:, 0, :] # master box
+    # project to IMAGE_SOURCE dim
+    deltas_v = deltas_specific[:, None, :]
     refined_rois = apply_box_deltas_graph(
-        rois, deltas_specific * config.BBOX_STD_DEV)
+        rois, deltas_v * config.BBOX_STD_DEV)
     # Clip boxes to image window
     refined_rois = clip_boxes_graph(refined_rois, window)
+    # reduce dim
+    refined_rois = tf.squeeze(refined_rois, axis=1)
 
     # TODO: Filter out boxes with zero area
 

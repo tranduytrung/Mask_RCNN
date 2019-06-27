@@ -6,7 +6,7 @@ from mrcnn.data.detection_targets import build_detection_targets
 from mrcnn.data.rois import generate_random_rois
 from mrcnn.data.rpn_targets import build_rpn_targets
 
-def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
+def data_generator(dataset, config, shuffle=True, augmentation=None,
                    random_rois=0, batch_size=1, detection_targets=False,
                    no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
@@ -15,8 +15,6 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
     dataset: The Dataset object to pick data from
     config: The model config object
     shuffle: If True, shuffles the samples before every epoch
-    augment: (deprecated. Use augmentation instead). If true, apply random
-        image augmentation. Currently, only horizontal flipping is offered.
     augmentation: Optional. An imgaug (https://github.com/aleju/imgaug) augmentation.
         For example, passing imgaug.augmenters.Fliplr(0.5) flips images
         right/left 50% of the time.
@@ -75,11 +73,11 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             # If the image source is not to be augmented pass None as augmentation
             if dataset.image_info[image_id]['source'] in no_augmentation_sources:
                 image, image_meta, gt_class_ids, gt_boxes = \
-                load_image_gt(dataset, config, image_id, augment=augment,
+                load_image_gt(dataset, config, image_id,
                               augmentation=None)
             else:
                 image, image_meta, gt_class_ids, gt_boxes = \
-                    load_image_gt(dataset, config, image_id, augment=augment,
+                    load_image_gt(dataset, config, image_id,
                                 augmentation=augmentation)
 
             # Skip images that have no instances. This can happen in cases
@@ -93,13 +91,13 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                                                     gt_class_ids, gt_boxes, config)
 
             # Mask R-CNN Targets
-            if random_rois:
-                rpn_rois = generate_random_rois(
-                    image.shape, random_rois, gt_class_ids, gt_boxes)
-                if detection_targets:
-                    rois, mrcnn_class_ids, mrcnn_bbox =\
-                        build_detection_targets(
-                            rpn_rois, gt_class_ids, gt_boxes, config)
+            # if random_rois:
+            #     rpn_rois = generate_random_rois(
+            #         image.shape, random_rois, gt_class_ids, gt_boxes)
+            #     if detection_targets:
+            #         rois, mrcnn_class_ids, mrcnn_bbox =\
+            #             build_detection_targets(
+            #                 rpn_rois, gt_class_ids, gt_boxes, config)
 
             # Init batch arrays
             if b == 0:
@@ -108,30 +106,31 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                 batch_rpn_match = np.zeros(
                     [batch_size, anchors.shape[0], 1], dtype=rpn_match.dtype)
                 batch_rpn_bbox = np.zeros(
-                    [batch_size, config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=rpn_bbox.dtype)
+                    [batch_size, config.RPN_TRAIN_ANCHORS_PER_IMAGE, config.IMAGE_SOURCES, 4], dtype=rpn_bbox.dtype)
                 batch_images = np.zeros(
                     (batch_size,) + image.shape, dtype=np.float32)
                 batch_gt_class_ids = np.zeros(
                     (batch_size, config.MAX_GT_INSTANCES), dtype=np.int32)
                 batch_gt_boxes = np.zeros(
                     (batch_size, config.MAX_GT_INSTANCES, 4), dtype=np.int32)
-                if random_rois:
-                    batch_rpn_rois = np.zeros(
-                        (batch_size, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
-                    if detection_targets:
-                        batch_rois = np.zeros(
-                            (batch_size,) + rois.shape, dtype=rois.dtype)
-                        batch_mrcnn_class_ids = np.zeros(
-                            (batch_size,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
-                        batch_mrcnn_bbox = np.zeros(
-                            (batch_size,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
+                # if random_rois:
+                #     batch_rpn_rois = np.zeros(
+                #         (batch_size, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
+                #     if detection_targets:
+                #         batch_rois = np.zeros(
+                #             (batch_size,) + rois.shape, dtype=rois.dtype)
+                #         batch_mrcnn_class_ids = np.zeros(
+                #             (batch_size,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
+                #         batch_mrcnn_bbox = np.zeros(
+                #             (batch_size,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
 
             # If more instances than fits in the array, sub-sample from them.
-            if gt_boxes.shape[0] > config.MAX_GT_INSTANCES:
+            master_gt_boxes = gt_boxes[0]
+            if master_gt_boxes.shape[0] > config.MAX_GT_INSTANCES:
                 ids = np.random.choice(
-                    np.arange(gt_boxes.shape[0]), config.MAX_GT_INSTANCES, replace=False)
+                    np.arange(master_gt_boxes.shape[0]), config.MAX_GT_INSTANCES, replace=False)
                 gt_class_ids = gt_class_ids[ids]
-                gt_boxes = gt_boxes[ids]
+                master_gt_boxes = master_gt_boxes[ids]
 
             # Add to batch
             batch_image_meta[b] = image_meta
@@ -139,13 +138,13 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             batch_rpn_bbox[b] = rpn_bbox
             batch_images[b] = utils.normlize_image(image.astype(np.float32), config)
             batch_gt_class_ids[b, :gt_class_ids.shape[0]] = gt_class_ids
-            batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
-            if random_rois:
-                batch_rpn_rois[b] = rpn_rois
-                if detection_targets:
-                    batch_rois[b] = rois
-                    batch_mrcnn_class_ids[b] = mrcnn_class_ids
-                    batch_mrcnn_bbox[b] = mrcnn_bbox
+            batch_gt_boxes[b, :master_gt_boxes.shape[0]] = master_gt_boxes
+            # if random_rois:
+            #     batch_rpn_rois[b] = rpn_rois
+            #     if detection_targets:
+            #         batch_rois[b] = rois
+            #         batch_mrcnn_class_ids[b] = mrcnn_class_ids
+            #         batch_mrcnn_bbox[b] = mrcnn_bbox
             b += 1
 
             # Batch full?
@@ -154,15 +153,15 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                           batch_gt_class_ids, batch_gt_boxes]
                 outputs = []
 
-                if random_rois:
-                    inputs.extend([batch_rpn_rois])
-                    if detection_targets:
-                        inputs.extend([batch_rois])
-                        # Keras requires that output and targets have the same number of dimensions
-                        batch_mrcnn_class_ids = np.expand_dims(
-                            batch_mrcnn_class_ids, -1)
-                        outputs.extend(
-                            [batch_mrcnn_class_ids, batch_mrcnn_bbox])
+                # if random_rois:
+                #     inputs.extend([batch_rpn_rois])
+                #     if detection_targets:
+                #         inputs.extend([batch_rois])
+                #         # Keras requires that output and targets have the same number of dimensions
+                #         batch_mrcnn_class_ids = np.expand_dims(
+                #             batch_mrcnn_class_ids, -1)
+                #         outputs.extend(
+                #             [batch_mrcnn_class_ids, batch_mrcnn_bbox])
 
                 yield inputs, outputs
 

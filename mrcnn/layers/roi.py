@@ -9,7 +9,7 @@ class PyramidROIAlign(KE.Layer):
     - pool_shape: [pool_height, pool_width] of the output pooled regions. Usually [7, 7]
 
     Inputs:
-    - boxes: [batch, num_boxes, (y1, x1, y2, x2)] in normalized
+    - boxes: [batch, num_boxes, IMAGE_SOURCES, (y1, x1, y2, x2)] in normalized
              coordinates. Possibly padded with zeros if not enough
              boxes to fill the array.
     - image_meta: [batch, (meta data)] Image details. See compose_image_meta()
@@ -17,7 +17,7 @@ class PyramidROIAlign(KE.Layer):
                     Each is [batch, height, width, channels]
 
     Output:
-    Pooled regions in the shape: [batch, num_boxes, pool_height, pool_width, channels].
+    Pooled regions in the shape: [batch, num_boxes, pool_height, pool_width, channels * IMAGE_SOURCES].
     The width and height are those specific in the pool_shape in the layer
     constructor.
     """
@@ -27,7 +27,7 @@ class PyramidROIAlign(KE.Layer):
         self.pool_shape = tuple(pool_shape)
 
     def call(self, inputs):
-        # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
+        # Crop boxes [batch, num_boxes, IMAGE_SOURCES, (y1, x1, y2, x2)] in normalized coords
         boxes = inputs[0]
 
         # Image meta
@@ -39,7 +39,7 @@ class PyramidROIAlign(KE.Layer):
         feature_maps = inputs[2:]
 
         # Assign each ROI to a level in the pyramid based on the ROI area.
-        y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
+        y1, x1, y2, x2 = tf.split(boxes, 4, axis=3)
         h = y2 - y1
         w = x2 - x1
         # Use shape of first image. Images in a batch must have the same size.
@@ -51,13 +51,13 @@ class PyramidROIAlign(KE.Layer):
         roi_level = log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
         roi_level = tf.minimum(5, tf.maximum(
             2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
-        roi_level = tf.squeeze(roi_level, 2)
+        roi_level = tf.squeeze(roi_level, 3)
 
         # Loop through levels and apply ROI pooling to each. P2 to P5.
         pooled = []
         box_to_level = []
         for i, level in enumerate(range(2, 6)):
-            ix = tf.where(tf.equal(roi_level, level))
+            ix = tf.where(tf.equal(roi_level, level)) # [[batch, #box, #image_source]]
             level_boxes = tf.gather_nd(boxes, ix)
 
             # Box indices for crop_and_resize.
@@ -78,7 +78,7 @@ class PyramidROIAlign(KE.Layer):
             #
             # Here we use the simplified approach of a single value per bin,
             # which is how it's done in tf.crop_and_resize()
-            # Result: [batch * num_boxes, pool_height, pool_width, channels]
+            # Result: [batch * num_boxes * IMAGE_SOURCES, pool_height, pool_width, channels]
             pooled.append(tf.image.crop_and_resize(
                 feature_maps[i], level_boxes, box_indices, self.pool_shape,
                 method="bilinear"))
@@ -88,27 +88,31 @@ class PyramidROIAlign(KE.Layer):
 
         # Pack box_to_level mapping into one array and add another
         # column representing the order of pooled boxes
-        box_to_level = tf.concat(box_to_level, axis=0)
+        box_to_level = tf.concat(box_to_level, axis=0) # [[batch, #box, #image_source]]
         box_range = tf.expand_dims(tf.range(tf.shape(box_to_level)[0]), 1)
-        box_to_level = tf.concat([tf.cast(box_to_level, tf.int32), box_range],
-                                 axis=1)
+        box_to_level = tf.concat([tf.cast(box_to_level, tf.int32), box_range], axis=1) 
+        # --> [[batch, #box, #image_source, idx]]
 
         # Rearrange pooled features to match the order of the original boxes
         # Sort box_to_level by batch then box index
         # TF doesn't have a way to sort by two columns, so merge them and sort.
-        sorting_tensor = box_to_level[:, 0] * 100000 + box_to_level[:, 1]
+        # noted that it assume the max number of source is 10
+        sorting_tensor = box_to_level[:, 0] * 10000000 + box_to_level[:, 1]*10 + box_to_level[:, 2]
         ix = tf.nn.top_k(sorting_tensor, k=tf.shape(
             box_to_level)[0]).indices[::-1]
-        ix = tf.gather(box_to_level[:, 2], ix)
+        ix = tf.gather(box_to_level[:, 3], ix)
         pooled = tf.gather(pooled, ix)
 
         # Re-add the batch dimension
-        shape = tf.concat([tf.shape(boxes)[:2], tf.shape(pooled)[1:]], axis=0)
-        pooled = tf.reshape(pooled, shape)
+        pre_shape = tf.shape(boxes)[:3]
+        post_shape = tf.shape(pooled)[-3:]
+        pooled = tf.reshape(pooled, tf.concat([pre_shape, post_shape], axis=0)) # [batch, boxes, IMAGE_SOURCES, pool_height, pool_width, channels]
+        pooled = tf.transpose(pooled, perm=[0, 1, 3, 4, 2, 5]) # [batch, boxes, pool_height, pool_width, IMAGE_SOURCES, channels]
+        pooled = tf.reshape(pooled, tf.concat([pre_shape[:2], post_shape[:2], [pre_shape[2] * post_shape[2]]], axis=0))
         return pooled
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1], )
+        return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1]*input_shape[0][2], )
 
 
 def log2_graph(x):

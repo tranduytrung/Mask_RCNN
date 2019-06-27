@@ -3,7 +3,7 @@ import random
 import numpy as np
 from mrcnn import utils
 
-def load_image_gt(dataset, config, image_id, augment=False, augmentation=None):
+def load_image_gt(dataset, config, image_id, augmentation=None):
     """Load and return ground truth data for an image (image, mask, bounding boxes).
 
     augment: (deprecated. Use augmentation instead). If true, apply random
@@ -13,29 +13,22 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None):
         right/left 50% of the time.
 
     Returns:
-    image: [height, width, 3]
+    image: [height, width, IMAGE_SOURCES * 3]
     shape: the original shape of the image before resizing and cropping.
     class_ids: [instance_count] Integer class IDs
-    bbox: [instance_count, (y1, x1, y2, x2)]
+    bbox: [instance_count, IMAGE_SOURCES, (y1, x1, y2, x2)]
     """
     # Load image and mask
     image, mask, class_ids = dataset.load_image_and_mask(image_id)
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
-        image,
+        image.reshape((original_shape[0], original_shape[1], -1)),
         min_dim=config.IMAGE_MIN_DIM,
         min_scale=config.IMAGE_MIN_SCALE,
         max_dim=config.IMAGE_MAX_DIM,
         mode=config.IMAGE_RESIZE_MODE)
-    mask = utils.resize_mask(mask, scale, padding, crop)
-
-    # Random horizontal flips.
-    # TODO: will be removed in a future update in favor of augmentation
-    if augment:
-        logging.warning("'augment' is deprecated. Use 'augmentation' instead.")
-        if random.randint(0, 1):
-            image = np.fliplr(image)
-            mask = np.fliplr(mask)
+    mask = utils.resize_mask(mask.reshape((original_shape[0], original_shape[1], -1)),
+        scale, padding, crop)
 
     # Augmentation
     # This requires the imgaug lib (https://github.com/aleju/imgaug)
@@ -57,14 +50,16 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None):
         # Change mask back to bool
         mask = mask.astype(np.bool)
 
+    mask = mask.reshape((mask.shape[0], mask.shape[1], -1, config.IMAGE_SOURCES))
+    master_mask = mask[:, :, :, 0]
     # Note that some boxes might be all zeros if the corresponding mask got cropped out.
     # and here is to filter them out
-    _idx = np.sum(mask, axis=(0, 1)) > 0
-    mask = mask[:, :, _idx]
+    _idx = np.sum(master_mask, axis=(0, 1)) > 0
+    mask = mask[:, :, _idx, :]
     class_ids = class_ids[_idx]
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
-    # bbox: [num_instances, (y1, x1, y2, x2)]
+    # bbox: [num_instances, IMAGE_SOURCES, (y1, x1, y2, x2)]
     bbox = utils.extract_bboxes(mask)
 
     # Active classes

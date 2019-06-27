@@ -82,21 +82,25 @@ class MaskRCNN():
             shape=config.IMAGE_SHAPE, name="input_image")
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
+        # Anchors
+        np_anchors = self.get_anchors(config.IMAGE_SHAPE)
+        anchors = KL.Input(tensor=tf.constant(np_anchors))
+
         if mode == "training":
             # RPN GT
             input_rpn_match = KL.Input(
-                shape=[None, 1], name="input_rpn_match", dtype=tf.int32)
+                shape=[anchors.shape[0], 1], name="input_rpn_match", dtype=tf.int32)
             input_rpn_bbox = KL.Input(
-                shape=[None, 4], name="input_rpn_bbox", dtype=tf.float32)
+                shape=[config.RPN_TRAIN_ANCHORS_PER_IMAGE, config.IMAGE_SOURCES, 4], name="input_rpn_bbox", dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes, and masks)
             # 1. GT Class IDs (zero padded)
             input_gt_class_ids = KL.Input(
-                shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+                shape=[config.MAX_GT_INSTANCES], name="input_gt_class_ids", dtype=tf.int32)
             # 2. GT Boxes in pixels (zero padded)
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
             input_gt_boxes = KL.Input(
-                shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
+                shape=[config.MAX_GT_INSTANCES, 4], name="input_gt_boxes", dtype=tf.float32)
             # Normalize coordinates
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
@@ -140,13 +144,9 @@ class MaskRCNN():
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
-        # Anchors
-        np_anchors = self.get_anchors(config.IMAGE_SHAPE)
-        anchors = KL.Input(tensor=tf.constant(np_anchors))
-
         # RPN Model
         rpn = build_rpn_model(config.RPN_ANCHOR_STRIDE,
-                              len(config.RPN_ANCHOR_RATIOS), config.TOP_DOWN_PYRAMID_SIZE)
+                              len(config.RPN_ANCHOR_RATIOS), config.TOP_DOWN_PYRAMID_SIZE, config.IMAGE_SOURCES)
         # Loop through pyramid layers
         layer_outputs = []  # list of lists
         for p in rpn_feature_maps:
@@ -167,6 +167,7 @@ class MaskRCNN():
         # and zero padded.
         proposal_count = config.POST_NMS_ROIS_TRAINING if mode == "training"\
             else config.POST_NMS_ROIS_INFERENCE
+        # [batch, N, IMAGE_SOURCES, 4]
         rpn_rois = ProposalLayer(
             proposal_count=proposal_count,
             nms_threshold=config.RPN_NMS_THRESHOLD,
@@ -180,15 +181,16 @@ class MaskRCNN():
                 lambda x: parse_image_meta_graph(x)["active_class_ids"]
             )(input_image_meta)
 
-            if not config.USE_RPN_ROIS:
-                # Ignore predicted ROIs and use ROIs provided as an input.
-                input_rois = KL.Input(shape=[config.POST_NMS_ROIS_TRAINING, 4],
-                                      name="input_roi", dtype=np.int32)
-                # Normalize coordinates
-                target_rois = KL.Lambda(lambda x: norm_boxes_graph(
-                    x, K.shape(input_image)[1:3]))(input_rois)
-            else:
-                target_rois = rpn_rois
+            # if not config.USE_RPN_ROIS:
+            #     # Ignore predicted ROIs and use ROIs provided as an input.
+            #     input_rois = KL.Input(shape=[config.POST_NMS_ROIS_TRAINING, 4],
+            #                           name="input_roi", dtype=np.int32)
+            #     # Normalize coordinates
+            #     target_rois = KL.Lambda(lambda x: norm_boxes_graph(
+            #         x, K.shape(input_image)[1:3]))(input_rois)
+            # else:
+            #     target_rois = rpn_rois
+            target_rois = rpn_rois
 
             # Generate detection targets
             # Subsamples proposals and generates target outputs for training
@@ -222,8 +224,8 @@ class MaskRCNN():
             # Model
             inputs = [input_image, input_image_meta,
                       input_rpn_match, input_rpn_bbox, input_gt_class_ids, input_gt_boxes, anchors]
-            if not config.USE_RPN_ROIS:
-                inputs.append(input_rois)
+            # if not config.USE_RPN_ROIS:
+            #     inputs.append(input_rois)
             outputs = [rpn_class_logits, rpn_class, rpn_bbox,
                        mrcnn_class_logits, mrcnn_class, mrcnn_bbox,
                        rpn_rois, output_rois,
@@ -893,7 +895,7 @@ if __name__ == "__main__":
         NAME = 'test'
         GPU_COUNT = 1
         IMAGES_PER_GPU = 1
-        BACKBONE = 'mobilenetv2'
+        BACKBONE = 'resnet50'
 
     config = InferenceConfig()
-    MaskRCNN(mode="inference", model_dir='.', config=config)
+    MaskRCNN(mode="training", model_dir='.', config=config)

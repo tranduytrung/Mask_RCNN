@@ -9,7 +9,7 @@ def fpn_classifier_graph(rois, feature_maps, image_meta,
     """Builds the computation graph of the feature pyramid network classifier
     and regressor heads.
 
-    rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
+    rois: [batch, num_rois, IMAGE_SOURCES, (y1, x1, y2, x2)] Proposal boxes in normalized
           coordinates.
     feature_maps: List of feature maps from different layers of the pyramid,
                   [P2, P3, P4, P5]. Each has a different resolution.
