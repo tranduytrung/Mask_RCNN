@@ -71,14 +71,12 @@ def parse_image_meta_graph(meta):
     image_shape = meta[:, 4:7]
     window = meta[:, 7:11]  # (y1, x1, y2, x2) window of image in in pixels
     scale = meta[:, 11]
-    active_class_ids = meta[:, 12:]
     return {
         "image_id": image_id,
         "original_image_shape": original_image_shape,
         "image_shape": image_shape,
         "window": window,
-        "scale": scale,
-        "active_class_ids": active_class_ids,
+        "scale": scale
     }
 
 def box_refinement_graph(box, gt_box):

@@ -62,21 +62,14 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     # bbox: [num_instances, IMAGE_SOURCES, (y1, x1, y2, x2)]
     bbox = utils.extract_bboxes(mask)
 
-    # Active classes
-    # Different datasets have different classes, so track the
-    # classes supported in the dataset of this image.
-    active_class_ids = np.zeros([dataset.num_classes], dtype=np.int32)
-    source_class_ids = dataset.source_class_ids[dataset.image_info[image_id]["source"]]
-    active_class_ids[source_class_ids] = 1
-
     # Image meta data
     image_meta = compose_image_meta(image_id, original_shape, image.shape,
-                                    window, scale, active_class_ids)
+                                    window, scale)
 
     return image, image_meta, class_ids, bbox
 
 def compose_image_meta(image_id, original_image_shape, image_shape,
-                       window, scale, active_class_ids):
+                       window, scale):
     """Takes attributes of an image and puts them in one 1D array.
 
     image_id: An int ID of the image. Useful for debugging.
@@ -85,17 +78,13 @@ def compose_image_meta(image_id, original_image_shape, image_shape,
     window: (y1, x1, y2, x2) in pixels. The area of the image where the real
             image is (excluding the padding)
     scale: The scaling factor applied to the original image (float32)
-    active_class_ids: List of class_ids available in the dataset from which
-        the image came. Useful if training on images from multiple datasets
-        where not all classes are present in all datasets.
     """
     meta = np.array(
         [image_id] +                  # size=1
         list(original_image_shape) +  # size=3
         list(image_shape) +           # size=3
         list(window) +                # size=4 (y1, x1, y2, x2) in image cooredinates
-        [scale] +                     # size=1
-        list(active_class_ids)        # size=num_classes
+        [scale]                       # size=1
     )
     return meta
 

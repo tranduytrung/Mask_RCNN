@@ -1,4 +1,5 @@
 import logging
+import traceback
 import numpy as np
 from mrcnn import utils
 from mrcnn.data.load_image import load_image_gt
@@ -47,7 +48,6 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
     image_index = -1
     image_ids = np.arange(len(dataset))
     error_count = 0
-    no_augmentation_sources = no_augmentation_sources or []
 
     # Anchors
     # [anchor_count, (y1, x1, y2, x2)]
@@ -70,14 +70,8 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
             image_id = image_ids[image_index]
 
             # If the image source is not to be augmented pass None as augmentation
-            if dataset.image_info[image_id]['source'] in no_augmentation_sources:
-                image, image_meta, gt_class_ids, gt_boxes = \
-                load_image_gt(dataset, config, image_id,
-                              augmentation=None)
-            else:
-                image, image_meta, gt_class_ids, gt_boxes = \
-                    load_image_gt(dataset, config, image_id,
-                                augmentation=augmentation)
+            image, image_meta, gt_class_ids, gt_boxes = \
+                load_image_gt(dataset, config, image_id, augmentation=augmentation)
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
@@ -135,7 +129,7 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
             batch_image_meta[b] = image_meta
             batch_rpn_match[b] = rpn_match[:, np.newaxis]
             batch_rpn_bbox[b] = rpn_bbox
-            batch_images[b] = utils.normlize_image(image.astype(np.float32), config)
+            batch_images[b] = image
             batch_gt_class_ids[b, :gt_class_ids.shape[0]] = gt_class_ids
             batch_gt_boxes[b, :master_gt_boxes.shape[0]] = master_gt_boxes
             # if random_rois:
@@ -170,8 +164,8 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
             raise
         except:
             # Log it and skip the image
-            logging.exception("Error processing image {}".format(
-                dataset.image_info[image_id]))
+            logging.exception("Error processing image {}".format(image_id))
+            logging.debug(traceback.format_exc())
             error_count += 1
             if error_count > 5:
                 raise

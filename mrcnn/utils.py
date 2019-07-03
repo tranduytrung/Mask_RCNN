@@ -889,14 +889,12 @@ def parse_image_meta(meta):
     image_shape = meta[:, 4:7]
     window = meta[:, 7:11]  # (y1, x1, y2, x2) window of image in in pixels
     scale = meta[:, 11]
-    active_class_ids = meta[:, 12:]
     return {
         "image_id": image_id.astype(np.int32),
         "original_image_shape": original_image_shape.astype(np.int32),
         "image_shape": image_shape.astype(np.int32),
         "window": window.astype(np.int32),
-        "scale": scale.astype(np.float32),
-        "active_class_ids": active_class_ids.astype(np.int32),
+        "scale": scale.astype(np.float32)
     }
 
 __mode_dict = {

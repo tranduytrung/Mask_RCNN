@@ -227,7 +227,7 @@ class Config(object):
 
         # Image meta data length
         # See compose_image_meta() for details
-        self.IMAGE_META_SIZE = 1 + 3 + 3 + 4 + 1 + self.NUM_CLASSES
+        self.IMAGE_META_SIZE = 1 + 3 + 3 + 4 + 1
 
     def display(self):
         """Display Configuration values."""

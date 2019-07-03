@@ -6,6 +6,7 @@ results/
 temp/
 test/
 samples/balloon/data/
+auto
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
