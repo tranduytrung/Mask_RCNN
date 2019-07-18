@@ -240,9 +240,10 @@ class MaskRCNN():
             detections = DetectionLayer(config, name="mrcnn_detection")(
                 [rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
 
+            # RPN: [batch, N, IMAGE_SOURCES, (y1, x1, y2, x2)]
+            # Detections: [batch, num_detections, (y1, x1, y2, x2, class_id, score)]
             model = KM.Model([input_image, input_image_meta, anchors],
-                             [detections, mrcnn_class, mrcnn_bbox,
-                                 rpn_rois, rpn_class, rpn_bbox],
+                             [detections, rpn_rois],
                              name='mask_rcnn')
 
         # Add multi-GPU support.
@@ -571,7 +572,7 @@ class MaskRCNN():
             different sizes.
 
         Returns 3 Numpy matrices:
-        molded_images: [N, h, w, 3]. Images resized and normalized.
+        molded_images: [N, h, w, C]. Images resized and normalized.
         image_metas: [N, length of meta data]. Details about each image.
         windows: [N, (y1, x1, y2, x2)]. The portion of the image that has the
             original image (padding excluded).
@@ -588,11 +589,10 @@ class MaskRCNN():
                 min_scale=self.config.IMAGE_MIN_SCALE,
                 max_dim=self.config.IMAGE_MAX_DIM,
                 mode=self.config.IMAGE_RESIZE_MODE)
-            molded_image = normlize_image(molded_image, self.config)
+            # molded_image = normlize_image(molded_image, self.config)
             # Build image_meta
             image_meta = compose_image_meta(
-                0, image.shape, molded_image.shape, window, scale,
-                np.zeros([self.config.NUM_CLASSES], dtype=np.int32))
+                0, image.shape, molded_image.shape, window, scale)
             # Append
             molded_images.append(molded_image)
             windows.append(window)
@@ -610,7 +610,6 @@ class MaskRCNN():
         application.
 
         detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
-        mrcnn_mask: [N, height, width, num_classes]
         original_image_shape: [H, W, C] Original image shape before resizing
         image_shape: [H, W, C] Shape of the image after resizing and padding
         window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
@@ -632,18 +631,7 @@ class MaskRCNN():
         class_ids = detections[:N, 4].astype(np.int32)
         scores = detections[:N, 5]
 
-        # Translate normalized coordinates in the resized image to pixel
-        # coordinates in the original image before resizing
-        window = utils.norm_boxes(window, image_shape[:2])
-        wy1, wx1, wy2, wx2 = window
-        shift = np.array([wy1, wx1, wy1, wx1])
-        wh = wy2 - wy1  # window height
-        ww = wx2 - wx1  # window width
-        scale = np.array([wh, ww, wh, ww])
-        # Convert boxes to normalized coordinates on the window
-        boxes = np.divide(boxes - shift, scale)
-        # Convert boxes to pixel coordinates on the original image
-        boxes = utils.denorm_boxes(boxes, original_image_shape[:2])
+        boxes = utils.unmold_boxes(boxes, original_image_shape, image_shape, window)
 
         # Filter out detections with zero area. Happens in early training when
         # network weights are still random
@@ -656,10 +644,24 @@ class MaskRCNN():
 
         return boxes, class_ids, scores
 
+    def unmold_rpn_rois(self, rois, original_image_shape,
+                          image_shape, window):
+        n_image_sources = rois.shape[1]
+        boxes = np.empty_like(rois, dtype=np.int32)
+        for s in range(n_image_sources):
+            boxes[:, s, :] = utils.unmold_boxes(rois[:, s, :], original_image_shape, image_shape, window)
+            
+        exclude_ix = np.where(
+            (boxes[:, 0,  2] - boxes[:, 0, 0]) * (boxes[:, 0, 3] - boxes[:, 0, 1]) <= 0)[0]
+        if exclude_ix.shape[0] > 0:
+            boxes = np.delete(boxes, exclude_ix, axis=0)
+
+        return boxes
+
     def detect(self, images, verbose=0):
         """Runs the detection pipeline.
 
-        images: List of images, potentially of different sizes.
+        images: List of images, potentially of different sizes. Have shape of list([H, W, C]) in float32
 
         Returns a list of dicts, one dict per image. The dict contains:
         rois: [N, (y1, x1, y2, x2)] detection bounding boxes
@@ -679,31 +681,32 @@ class MaskRCNN():
         # Mold inputs to format expected by the neural network
         molded_images, image_metas, windows = self.mold_inputs(images)
 
-        # Validate image sizes
-        # All images in a batch MUST be of the same size
-        image_shape = molded_images[0].shape
-        for g in molded_images[1:]:
-            assert g.shape == image_shape,\
-                "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
-
         if verbose:
             log("molded_images", molded_images)
             log("image_metas", image_metas)
         # Run object detection
-        detections, _, _, _, _, _ =\
+        # RPN: [batch, N, IMAGE_SOURCES, (y1, x1, y2, x2)]
+        # Detections: [batch, num_detections, (y1, x1, y2, x2, class_id, score)]
+        detections, rpn_rois =\
             self.keras_model.predict(
                 [molded_images, image_metas], verbose=0)
+
         # Process detections
         results = []
         for i, image in enumerate(images):
             final_rois, final_class_ids, final_scores =\
                 self.unmold_detections(detections[i],
-                                       image.shape, molded_images[i].shape,
-                                       windows[i])
+                    image.shape, molded_images[i].shape,
+                    windows[i])
+
+            final_rpn_rois = self.unmold_rpn_rois(rpn_rois[i], 
+                image.shape, molded_images[i].shape, windows[i])
+            
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
+                "rpn_rois": final_rpn_rois
             })
         return results
 

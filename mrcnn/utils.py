@@ -634,8 +634,8 @@ def trim_zeros(x):
     return x[~np.all(x == 0, axis=1)]
 
 
-def compute_matches(gt_boxes, gt_class_ids, gt_masks,
-                    pred_boxes, pred_class_ids, pred_scores, pred_masks,
+def compute_matches(gt_boxes, gt_class_ids,
+                    pred_boxes, pred_class_ids, pred_scores,
                     iou_threshold=0.5, score_threshold=0.0):
     """Finds matches between prediction and ground truth instances.
 
@@ -646,21 +646,15 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
                     the matched ground truth box.
         overlaps: [pred_boxes, gt_boxes] IoU overlaps.
     """
-    # Trim zero padding
-    # TODO: cleaner to do zero unpadding upstream
-    gt_boxes = trim_zeros(gt_boxes)
-    gt_masks = gt_masks[..., :gt_boxes.shape[0]]
-    pred_boxes = trim_zeros(pred_boxes)
-    pred_scores = pred_scores[:pred_boxes.shape[0]]
+
     # Sort predictions by score from high to low
     indices = np.argsort(pred_scores)[::-1]
     pred_boxes = pred_boxes[indices]
     pred_class_ids = pred_class_ids[indices]
     pred_scores = pred_scores[indices]
-    pred_masks = pred_masks[..., indices]
 
     # Compute IoU overlaps [pred_masks, gt_masks]
-    overlaps = compute_overlaps_masks(pred_masks, gt_masks)
+    overlaps = compute_overlaps(pred_boxes, gt_boxes)
 
     # Loop through predictions and find matching ground truth boxes
     match_count = 0
@@ -693,8 +687,8 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
     return gt_match, pred_match, overlaps
 
 
-def compute_ap(gt_boxes, gt_class_ids, gt_masks,
-               pred_boxes, pred_class_ids, pred_scores, pred_masks,
+def compute_ap(gt_boxes, gt_class_ids,
+               pred_boxes, pred_class_ids, pred_scores,
                iou_threshold=0.5):
     """Compute Average Precision at a set IoU threshold (default 0.5).
 
@@ -706,8 +700,8 @@ def compute_ap(gt_boxes, gt_class_ids, gt_masks,
     """
     # Get matches and overlaps
     gt_match, pred_match, overlaps = compute_matches(
-        gt_boxes, gt_class_ids, gt_masks,
-        pred_boxes, pred_class_ids, pred_scores, pred_masks,
+        gt_boxes, gt_class_ids,
+        pred_boxes, pred_class_ids, pred_scores,
         iou_threshold)
 
     # Compute precision and recall at each prediction box step
@@ -909,3 +903,137 @@ def normlize_image(images, config):
     colors in RGB order.
     """
     return preprocess_input(images, 'channels_last', __mode_dict[config.BACKBONE])
+
+def unmold_boxes(boxes, original_image_shape, image_shape, window):
+    """ unmold boxes to original shape
+    
+    boxes: [N, (y1, x1, y2, x2)]
+    original_image_shape: [H, W, C] Original image shape before resizing
+    image_shape: [H, W, C] Shape of the image after resizing and padding
+    window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
+            image is excluding the padding.
+    """
+    # Translate normalized coordinates in the resized image to pixel
+    # coordinates in the original image before resizing
+    window = norm_boxes(window, image_shape[:2])
+    wy1, wx1, wy2, wx2 = window
+    shift = np.array([wy1, wx1, wy1, wx1])
+    wh = wy2 - wy1  # window height
+    ww = wx2 - wx1  # window width
+    scale = np.array([wh, ww, wh, ww])
+    # Convert boxes to normalized coordinates on the window
+    boxes = np.divide(boxes - shift, scale)
+    # Convert boxes to pixel coordinates on the original image
+    boxes = denorm_boxes(boxes, original_image_shape[:2])
+    return boxes
+
+def compute_matchesv2(pred_boxes, gt_boxes, query_iou=0.5):
+    """ compute the matches given that the boxes are same class
+    Input:
+        pred_boxes [n_pred, (y1,x1,y2,x2)]
+        gt_boxes [n_gt, (y1,x1,y2,x2)]
+        iou_threshold float
+    """
+    pred_match = np.zeros([pred_boxes.shape[0]], dtype=np.bool)
+    if pred_match.shape[0] == 0 or gt_boxes.shape[0] == 0:
+        return pred_match
+
+    # Compute IoU overlaps [pred_masks, gt_masks]
+    overlaps = compute_overlaps(pred_boxes, gt_boxes)
+    darg = np.argsort(-overlaps, axis=1) # descending
+    max_gt_indices = darg[:, 0]
+    gt_status = - np.ones([gt_boxes.shape[0]], dtype=np.int32)
+    for i in range(pred_match.shape[0]):
+        gt_index = max_gt_indices[i]
+        iou = overlaps[gt_index]
+        if iou < query_iou:
+            continue
+
+        if gt_status[gt_index] > -1:
+            # roll back
+            pred_match[gt_status[gt_index]] = False
+            gt_status[gt_index] = -2
+        elif gt_status[gt_index] == -1:
+            gt_status[gt_index] = i
+            pred_match[i] = True
+        
+    return pred_match
+
+def compute_apv2(pred_boxes, pred_ids, pred_scores, gt_boxes, gt_ids, query_id, query_iou=0.5):
+    """ compute AP of each class_ids given a set of predicted boxes and groundtruth boxes
+        each item in a list is a corresponding image
+    Inputs:
+        pred_boxes list([n_pred, (y1,x1,y2,x2)])
+        pred_ids list([n_pred])
+        pred_scores list([n_pred])
+        gt_boxes list([n_gt, (y1,x1,y2,x2)])
+        gt_ids list([n_gt])
+        query_id (int)
+        iou_threshold (float)
+    """
+
+    assert len(pred_boxes) == len(pred_ids) == len(gt_boxes) == len(gt_ids)
+    n_instances = len(pred_boxes)
+
+    pred_matches = []
+    pred_scores2 = []
+    n_gt = 0
+
+    for i in range(n_instances):
+        # filter the query id        
+        pred_qmask = pred_ids[i] == query_id
+        cpred_boxes = pred_boxes[i][pred_qmask]
+        cpred_scores = pred_scores[i][pred_qmask]
+
+        gt_qmask = gt_ids[i] == query_id
+        cgt_boxes = gt_boxes[i][gt_qmask]
+
+        # compute maches
+        cpred_matches = compute_matchesv2(cpred_boxes, cgt_boxes, query_iou)
+
+        # update
+        pred_matches.append(cpred_matches)
+        n_gt += cgt_boxes.shape[0]
+        pred_scores2.append(cpred_scores)
+
+    # flatten
+    pred_matches = np.concatenate(pred_matches)
+    pred_scores2 = np.concatenate(pred_scores2)
+
+    # sort by score
+    sarg = np.argsort(pred_scores2)[::-1]
+    pred_matches = pred_matches[sarg]
+
+    # compute precision
+    precisions = np.cumsum(pred_matches) / (np.arange(len(pred_matches)) + 1)
+    recalls = np.cumsum(pred_matches) / n_gt
+
+    # Pad with start and end values to simplify the math
+    precisions = np.concatenate([[0], precisions, [0]])
+    recalls = np.concatenate([[0], recalls, [1]])
+
+    # Ensure precision values decrease but don't increase. This way, the
+    # precision value at each recall threshold is the maximum it can be
+    # for all following recall thresholds, as specified by the VOC paper.
+    for i in range(len(precisions) - 2, -1, -1):
+        precisions[i] = np.maximum(precisions[i], precisions[i + 1])
+
+    # Compute mean AP over recall range
+    indices = np.where(recalls[:-1] != recalls[1:])[0] + 1
+    AP = np.sum((recalls[indices] - recalls[indices - 1]) *
+                 precisions[indices])
+    
+    return AP
+
+def compute_mAP(pred_boxes, pred_ids, pred_scores, gt_boxes, gt_ids, 
+    query_ids=None, query_ious=np.arange(0.5, 1.0, 0.05)):
+
+    if query_ids is None:
+        query_ids = np.unique(np.concatenate(gt_ids))
+
+    APs = []
+    for iou_threshold in query_ious:
+        for cat in query_ids:
+            APs.append(compute_apv2(pred_boxes, pred_ids, pred_scores, gt_boxes, gt_ids, query_id=cat, query_iou=iou_threshold))
+
+    return np.mean(APs)
