@@ -8,6 +8,7 @@ from keras.layers import MaxPool2D, AveragePooling2D, BatchNormalization, Lambda
 import numpy as np
 from mrcnn.models.utils import obtain_input_shape
 
+
 def channel_split(x, name=''):
     # equipartition
     in_channles = x.shape.as_list()[-1]
@@ -27,14 +28,14 @@ def channel_shuffle(x):
     return x
 
 
-def shuffle_unit(inputs, out_channels, bottleneck_ratio, strides=2, stage=1, block=1, name=""):
+def shuffle_unit(inputs, out_channels, bottleneck_ratio, strides=2, stage=1, block=1, train_bn=None, name=""):
     if K.image_data_format() == 'channels_last':
         bn_axis = -1
     else:
         raise ValueError('Only channels last supported')
 
-    prefix = '{}/stage{}/block{}'.format(name,stage, block)
-    bottleneck_channels = int(out_channels * bottleneck_ratio)
+    prefix = '{}/stage{}/block{}'.format(name, stage, block)
+    bottleneck_channels = int(out_channels * bottleneck_ratio * 0.5)
     if strides < 2:
         c_hat, c = channel_split(inputs, '{}/spl'.format(prefix))
         inputs = c
@@ -42,16 +43,16 @@ def shuffle_unit(inputs, out_channels, bottleneck_ratio, strides=2, stage=1, blo
     x = Conv2D(bottleneck_channels, kernel_size=(1, 1), strides=1,
                padding='same', name='{}/1x1conv_1'.format(prefix))(inputs)
     x = BatchNormalization(
-        axis=bn_axis, name='{}/bn_1x1conv_1'.format(prefix))(x)
+        axis=bn_axis, name='{}/bn_1x1conv_1'.format(prefix))(x, training=train_bn)
     x = Activation('relu', name='{}/relu_1x1conv_1'.format(prefix))(x)
     x = DepthwiseConv2D(kernel_size=3, strides=strides,
                         padding='same', name='{}/3x3dwconv'.format(prefix))(x)
     x = BatchNormalization(
-        axis=bn_axis, name='{}/bn_3x3dwconv'.format(prefix))(x)
+        axis=bn_axis, name='{}/bn_3x3dwconv'.format(prefix))(x, training=train_bn)
     x = Conv2D(bottleneck_channels, kernel_size=1, strides=1,
                padding='same', name='{}/1x1conv_2'.format(prefix))(x)
     x = BatchNormalization(
-        axis=bn_axis, name='{}/bn_1x1conv_2'.format(prefix))(x)
+        axis=bn_axis, name='{}/bn_1x1conv_2'.format(prefix))(x, training=train_bn)
     x = Activation('relu', name='{}/relu_1x1conv_2'.format(prefix))(x)
 
     if strides < 2:
@@ -61,11 +62,11 @@ def shuffle_unit(inputs, out_channels, bottleneck_ratio, strides=2, stage=1, blo
         s2 = DepthwiseConv2D(kernel_size=3, strides=2, padding='same',
                              name='{}/3x3dwconv_2'.format(prefix))(inputs)
         s2 = BatchNormalization(
-            axis=bn_axis, name='{}/bn_3x3dwconv_2'.format(prefix))(s2)
+            axis=bn_axis, name='{}/bn_3x3dwconv_2'.format(prefix))(s2, training=train_bn)
         s2 = Conv2D(bottleneck_channels, kernel_size=1, strides=1,
                     padding='same', name='{}/1x1_conv_3'.format(prefix))(s2)
         s2 = BatchNormalization(
-            axis=bn_axis, name='{}/bn_1x1conv_3'.format(prefix))(s2)
+            axis=bn_axis, name='{}/bn_1x1conv_3'.format(prefix))(s2, training=train_bn)
         s2 = Activation('relu', name='{}/relu_1x1conv_3'.format(prefix))(s2)
         ret = Concatenate(
             axis=bn_axis, name='{}/concat_2'.format(prefix))([x, s2])
@@ -95,13 +96,13 @@ def ShuffleNetV2(include_top=True,
                  input_shape=(224, 224, 3),
                  num_shuffle_units=[3, 7, 3],
                  bottleneck_ratio=1,
-                 classes=1000):
+                 classes=1000, train_bn=None):
     if K.backend() != 'tensorflow':
         raise RuntimeError('Only tensorflow supported for now')
     name = 'ShuffleNetV2_{}_{}_{}'.format(
         scale_factor, bottleneck_ratio, "".join([str(x) for x in num_shuffle_units]))
     input_shape = obtain_input_shape(input_shape, default_size=224, min_size=28, require_flatten=include_top,
-                                      data_format=K.image_data_format())
+                                     data_format=K.image_data_format())
     out_dim_stage_two = {0.5: 48, 1: 116, 1.5: 176, 2: 244}
 
     if pooling not in ['max', 'avg']:
@@ -112,9 +113,9 @@ def ShuffleNetV2(include_top=True,
                               dtype=np.float32), 0, 0)  # [0., 0., 1., 2.]
     out_channels_in_stage = 2**exp
     # calculate output channels for each stage
-    out_channels_in_stage *= out_dim_stage_two[bottleneck_ratio]
+    out_channels_in_stage *= out_dim_stage_two[scale_factor]
     out_channels_in_stage[0] = 24  # first stage has always 24 output channels
-    out_channels_in_stage *= scale_factor
+    out_channels_in_stage *= bottleneck_ratio
     out_channels_in_stage = out_channels_in_stage.astype(int)
 
     if input_tensor is None:
@@ -130,6 +131,7 @@ def ShuffleNetV2(include_top=True,
     # create shufflenet architecture
     x = Conv2D(filters=out_channels_in_stage[0], kernel_size=(3, 3), padding='same', use_bias=False, strides=(2, 2),
                activation='relu', name=prefix + '/stage1/conv1')(img_input)
+    stages.append(x)
     x = MaxPool2D(pool_size=(3, 3), strides=(2, 2),
                   padding='same', name=prefix + '/stage1/maxpool1')(x)
     stages.append(x)
@@ -143,13 +145,13 @@ def ShuffleNetV2(include_top=True,
                   stage=stage + 2, name=prefix)
         stages.append(x)
 
-    if bottleneck_ratio < 2:
+    if scale_factor < 2:
         k = 1024
     else:
         k = 2048
     x = Conv2D(k, kernel_size=1, padding='same', strides=1,
                name=prefix + 'conv5', activation='relu')(x)
-    stages.append(x)
+    stages[-1] = x
 
     if return_stages:
         return tuple(stages)
@@ -176,7 +178,7 @@ def ShuffleNetV2(include_top=True,
 if __name__ == '__main__':
     import os
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
-    model = ShuffleNetV2(include_top=True, input_shape=(
-        224, 224, 3), bottleneck_ratio=1)
+    model = ShuffleNetV2(include_top=False, return_stages=True,
+                         input_shape=(224, 224, 3), scale_factor=2.0)
 
     model.summary()

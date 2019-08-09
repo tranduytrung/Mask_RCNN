@@ -32,6 +32,7 @@ from mrcnn.layers.loss import rpn_class_loss_graph, rpn_bbox_loss_graph, mrcnn_c
 from mrcnn.data.generator import data_generator
 from mrcnn.data.load_image import compose_image_meta
 from mrcnn.models.mobilenetv2 import MobileNetV2
+from mrcnn.models.shufflenetv2 import ShuffleNetV2
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
@@ -112,6 +113,8 @@ class MaskRCNN():
         if config.BACKBONE == 'mobilenetv2':
             _, C2, C3, C4, C5 = MobileNetV2(input_tensor=input_image, include_top=False, 
                                     return_stages=True, weights=None, train_bn=config.TRAIN_BN)
+        elif config.BACKBONE == 'shufflenetv2':
+            _, C2, C3, C4, C5 = ShuffleNetV2(input_tensor=input_image, include_top=False, return_stages=True, scale_factor=2)
         else:
             _, C2, C3, C4, C5 = resnet_graph(input_image, config.BACKBONE,
                                              stage5=True, train_bn=config.TRAIN_BN)
@@ -905,7 +908,7 @@ if __name__ == "__main__":
         NAME = 'test'
         GPU_COUNT = 1
         IMAGES_PER_GPU = 1
-        BACKBONE = 'resnet50'
+        BACKBONE = 'shufflenetv2'
 
     config = InferenceConfig()
     MaskRCNN(mode="training", model_dir='.', config=config)
