@@ -46,7 +46,7 @@ def data_generator(dataset, config, shuffle=True, augmentation=None,
     """
     b = 0  # batch item index
     image_index = -1
-    image_ids = np.arange(len(dataset))
+    image_ids = list(range(len(dataset)))
     error_count = 0
 
     # Anchors

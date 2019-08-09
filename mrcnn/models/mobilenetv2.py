@@ -128,7 +128,7 @@ def MobileNetV2(input_shape=None,
                 input_tensor=None,
                 pooling=None,
                 classes=1000,
-                **kwargs):
+                train_bn=None):
     """Instantiates the MobileNetV2 architecture.
 
     # Arguments
@@ -317,53 +317,53 @@ def MobileNetV2(input_shape=None,
     x = layers.BatchNormalization(axis=channel_axis,
                                   epsilon=1e-3,
                                   momentum=0.999,
-                                  name='bn_Conv1')(x)
+                                  name='bn_Conv1')(x,training=train_bn)
     x = layers.ReLU(6., name=prefix + 'conv1_relu')(x)
 
     x = _inverted_res_block(x, filters=16, alpha=alpha, stride=1,
-                            expansion=1, block_id=0, prefix=prefix)
+                            expansion=1, block_id=0, prefix=prefix, train_bn=train_bn)
 
     # stage 2
     x = _inverted_res_block(x, filters=24, alpha=alpha, stride=2,
-                            expansion=6, block_id=1, prefix=prefix)
+                            expansion=6, block_id=1, prefix=prefix, train_bn=train_bn)
     stage2 = x = _inverted_res_block(x, filters=24, alpha=alpha, stride=1,
-                            expansion=6, block_id=2, prefix=prefix)
+                            expansion=6, block_id=2, prefix=prefix, train_bn=train_bn)
 
     # stage 3
     x = _inverted_res_block(x, filters=32, alpha=alpha, stride=2,
-                            expansion=6, block_id=3, prefix=prefix)
+                            expansion=6, block_id=3, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=32, alpha=alpha, stride=1,
-                            expansion=6, block_id=4, prefix=prefix)
+                            expansion=6, block_id=4, prefix=prefix, train_bn=train_bn)
     stage3 = x = _inverted_res_block(x, filters=32, alpha=alpha, stride=1,
-                            expansion=6, block_id=5, prefix=prefix)
+                            expansion=6, block_id=5, prefix=prefix, train_bn=train_bn)
 
     # stage 4
     x = _inverted_res_block(x, filters=64, alpha=alpha, stride=2,
-                            expansion=6, block_id=6, prefix=prefix)
+                            expansion=6, block_id=6, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=64, alpha=alpha, stride=1,
-                            expansion=6, block_id=7, prefix=prefix)
+                            expansion=6, block_id=7, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=64, alpha=alpha, stride=1,
-                            expansion=6, block_id=8, prefix=prefix)
+                            expansion=6, block_id=8, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=64, alpha=alpha, stride=1,
-                            expansion=6, block_id=9, prefix=prefix)
+                            expansion=6, block_id=9, prefix=prefix, train_bn=train_bn)
 
     x = _inverted_res_block(x, filters=96, alpha=alpha, stride=1,
-                            expansion=6, block_id=10, prefix=prefix)
+                            expansion=6, block_id=10, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=96, alpha=alpha, stride=1,
-                            expansion=6, block_id=11, prefix=prefix)
+                            expansion=6, block_id=11, prefix=prefix, train_bn=train_bn)
     stage4 = x = _inverted_res_block(x, filters=96, alpha=alpha, stride=1,
-                            expansion=6, block_id=12, prefix=prefix)
+                            expansion=6, block_id=12, prefix=prefix, train_bn=train_bn)
 
     # stage 5
     x = _inverted_res_block(x, filters=160, alpha=alpha, stride=2,
-                            expansion=6, block_id=13, prefix=prefix)
+                            expansion=6, block_id=13, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=160, alpha=alpha, stride=1,
-                            expansion=6, block_id=14, prefix=prefix)
+                            expansion=6, block_id=14, prefix=prefix, train_bn=train_bn)
     x = _inverted_res_block(x, filters=160, alpha=alpha, stride=1,
-                            expansion=6, block_id=15, prefix=prefix)
+                            expansion=6, block_id=15, prefix=prefix, train_bn=train_bn)
 
     x = _inverted_res_block(x, filters=320, alpha=alpha, stride=1,
-                            expansion=6, block_id=16, prefix=prefix)
+                            expansion=6, block_id=16, prefix=prefix, train_bn=train_bn)
 
     # no alpha applied to last conv as stated in the paper:
     # if the width multiplier is greater than 1 we
@@ -380,7 +380,7 @@ def MobileNetV2(input_shape=None,
     x = layers.BatchNormalization(axis=channel_axis,
                                   epsilon=1e-3,
                                   momentum=0.999,
-                                  name=prefix + 'conv2_bn')(x)
+                                  name=prefix + 'conv2_bn')(x, training=train_bn)
     stage5 = x = layers.ReLU(6., name=prefix + 'conv2_relu')(x)
 
     # return if only stages are required
@@ -426,7 +426,7 @@ def get_imagenet_weights_path(include_top=False, alpha=1.0, image_size=224):
             model_name, weight_url, cache_subdir='models')
         return weights_path
 
-def _inverted_res_block(inputs, expansion, stride, alpha, filters, block_id, prefix='mobilenetv2'):
+def _inverted_res_block(inputs, expansion, stride, alpha, filters, block_id, train_bn=None, prefix='mobilenetv2'):
     channel_axis = 1 if backend.image_data_format() == 'channels_first' else -1
 
     in_channels = backend.int_shape(inputs)[channel_axis]
@@ -446,7 +446,7 @@ def _inverted_res_block(inputs, expansion, stride, alpha, filters, block_id, pre
         x = layers.BatchNormalization(axis=channel_axis,
                                       epsilon=1e-3,
                                       momentum=0.999,
-                                      name=prefix + 'expand_bn')(x)
+                                      name=prefix + 'expand_bn')(x, training=train_bn)
         x = layers.ReLU(6., name=prefix + 'expand_relu')(x)
 
     # Depthwise
@@ -462,7 +462,7 @@ def _inverted_res_block(inputs, expansion, stride, alpha, filters, block_id, pre
     x = layers.BatchNormalization(axis=channel_axis,
                                   epsilon=1e-3,
                                   momentum=0.999,
-                                  name=prefix + 'depthwise_bn')(x)
+                                  name=prefix + 'depthwise_bn')(x, training=train_bn)
 
     x = layers.ReLU(6., name=prefix + 'depthwise_relu')(x)
 
@@ -476,7 +476,7 @@ def _inverted_res_block(inputs, expansion, stride, alpha, filters, block_id, pre
     x = layers.BatchNormalization(axis=channel_axis,
                                   epsilon=1e-3,
                                   momentum=0.999,
-                                  name=prefix + 'project_bn')(x)
+                                  name=prefix + 'project_bn')(x, training=train_bn)
 
     if in_channels == pointwise_filters and stride == 1:
         return layers.Add(name=prefix + 'add')([inputs, x])

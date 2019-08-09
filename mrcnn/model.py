@@ -110,7 +110,8 @@ class MaskRCNN():
         # Returns a list of the last layers of each stage, 5 in total.
         # Don't create the thead (stage 5), so we pick the 4th item in the list.
         if config.BACKBONE == 'mobilenetv2':
-            _, C2, C3, C4, C5 = MobileNetV2(input_tensor=input_image, include_top=False, return_stages=True, weights=None)
+            _, C2, C3, C4, C5 = MobileNetV2(input_tensor=input_image, include_top=False, 
+                                    return_stages=True, weights=None, train_bn=config.TRAIN_BN)
         else:
             _, C2, C3, C4, C5 = resnet_graph(input_image, config.BACKBONE,
                                              stage5=True, train_bn=config.TRAIN_BN)
@@ -348,6 +349,8 @@ class MaskRCNN():
         optimizer = keras.optimizers.SGD(
             lr=learning_rate, momentum=momentum,
             clipnorm=self.config.GRADIENT_CLIP_NORM)
+        # optimizer = keras.optimizers.Adam(
+        #     lr=learning_rate, clipnorm=self.config.GRADIENT_CLIP_NORM)
         # Add Losses
         # First, clear previously set losses to avoid duplication
         self.keras_model._losses = []
@@ -501,18 +504,29 @@ class MaskRCNN():
         assert self.mode == "training", "Create model in training mode."
 
         # Pre-defined layer regular expressions
-        layer_regex = {
-            # all layers but the backbone
-            "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            # From a specific Resnet stage and up
-            "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            "5+": r"(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            # All layers
-            "all": ".*",
+        heads_regex = r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)"
+        backbone_regex = {
+            "resnet50": {
+                "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)",
+                "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)",
+                "5+": r"(res5.*)|(bn5.*)",
+            },
+            "mobilenetv2": {
+                "3+": r"(mobilenetv2\_block\_([3-9]|1[0-9])\_.*)",
+                "4+": r"(mobilenetv2\_block\_([6-9]|1[0-9])\_.*)",
+                "5+": r"(mobilenetv2\_block\_1[3-9]\_.*)",
+            }
         }
-        if layers in layer_regex.keys():
-            layers = layer_regex[layers]
+
+        backbone = self.config.BACKBONE
+        selected_backbone_regex = backbone_regex[backbone]
+
+        if layers == 'all':
+            layers = '.*'
+        elif layers == 'heads':
+            layers = heads_regex
+        elif layers in selected_backbone_regex.keys():
+            layers = f'{heads_regex}|{selected_backbone_regex[layers]}'
 
         # Data generators
         train_generator = data_generator(train_dataset, self.config, shuffle=True,

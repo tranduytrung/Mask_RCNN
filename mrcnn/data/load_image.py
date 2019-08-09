@@ -53,10 +53,10 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
     mask = mask.reshape((mask.shape[0], mask.shape[1], -1, config.IMAGE_SOURCES))
     master_mask = mask[:, :, :, 0]
     # Note that some boxes might be all zeros if the corresponding mask got cropped out.
-    # and here is to filter them out
-    _idx = np.sum(master_mask, axis=(0, 1)) > 0
-    mask = mask[:, :, _idx, :]
-    class_ids = class_ids[_idx]
+    # and here is to filter them out => let dataset handle it
+    # _idx = np.sum(master_mask, axis=(0, 1)) > 0
+    # mask = mask[:, :, _idx, :]
+    # class_ids = class_ids[_idx]
     # Bounding boxes. Note that some boxes might be all zeros
     # if the corresponding mask got cropped out.
     # bbox: [num_instances, IMAGE_SOURCES, (y1, x1, y2, x2)]
@@ -87,7 +87,6 @@ def compose_image_meta(image_id, original_image_shape, image_shape,
         [scale]                       # size=1
     )
     return meta
-
 
 # Augmenters that are safe to apply to masks
 # Some, such as Affine, have settings that make them unsafe, so always
